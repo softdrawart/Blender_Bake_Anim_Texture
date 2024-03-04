@@ -8,7 +8,7 @@ bl_info = {
     "category": "Animation",
 }
 
-import bpy
+import bpy, shutil
 
 def texture_node(self, context):
     # Get the active node's image name
@@ -18,7 +18,7 @@ def texture_node(self, context):
 
 class BakeSettings(bpy.types.PropertyGroup):
     filepath: bpy.props.StringProperty(subtype="FILE_PATH", description="render folder path")
-    texture_node: bpy.props.StringProperty(default = texture_node,name = "Image Texture Node", description = "Select any Texture Node")
+    #texture_node: bpy.props.StringProperty(name = "Image Texture Node", description = "Select any Texture Node")
 
 class BakeAnimationOperator(bpy.types.Operator):
     bl_idname = "bake.anim_texture_bake"
@@ -29,8 +29,75 @@ class BakeAnimationOperator(bpy.types.Operator):
     #run the blender bake operator in sequence one after another
     #and save the image with frame number bake_####.png
     '''
+    baking = False
+    _cancel = False
+    _timer = None
+    render_frame: bpy.props.BoolProperty(default=False)  # frame rendering
+    img: bpy.props.StringProperty(default='') # image rendered
     
-    pass
+    def bake_complete(self, scene, context=None):
+        print("Bake complete")
+        
+        #save image
+        img = bpy.data.images[self.img]
+        filename = bpy.path.abspath(f"//render_{bpy.context.scene.frame_current:04d}.png")
+        img_filepath_abs = bpy.path.abspath(img.filepath, library=img.library)
+        print(f"Saving file {filename}")
+        
+        img.save()
+        shutil.copyfile(img_filepath_abs, filename)
+        
+        self.baking = False
+        if not self.render_frame:
+            bpy.context.scene.frame_current += 1
+    def bake_pre(self, scene, context=None):
+        print("Bake started")
+        self.baking = True
+    def bake_cancel(self, scene, context=None):
+        print("Bake cancelled")
+        self._cancel = True
+        self.bake = False
+    @classmethod
+    def poll(cls, context):
+        return bpy.context.mode == 'OBJECT'
+    def execute(self, context):
+        self.baking = False
+        self._cancel = False
+        #set frame start as our current frame
+        if not self.render_frame:
+            context.scene.frame_current = context.scene.frame_start
+        wm = bpy.context.window_manager
+        #add bake handlers
+        bpy.app.handlers.object_bake_complete.append(self.bake_complete)
+        bpy.app.handlers.object_bake_cancel.append(self.bake_cancel)
+        bpy.app.handlers.object_bake_pre.append(self.bake_pre)
+        #call bake before going into modal check
+        bpy.ops.object.bake('INVOKE_DEFAULT')
+        #add timer
+        self._timer = wm.event_timer_add(time_step = 0.5, window = context.window)
+        wm.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+    def modal(self, context, event):
+        if event.type == 'TIMER':
+            #if its not the end of the frame range and not single frame render and the baking is finished then call another bake
+            if context.scene.frame_current > context.scene.frame_end or self._cancel or (self.render_frame and not self.baking):
+                bpy.app.handlers.object_bake_complete.remove(self.bake_complete)
+                bpy.app.handlers.object_bake_cancel.remove(self.bake_cancel)
+                bpy.app.handlers.object_bake_pre.remove(self.bake_pre)
+                
+                context.window_manager.event_timer_remove(self._timer)
+                if self._cancel:
+                    return {'CANCELLED'}
+                return {'FINISHED'}
+            elif not self.baking:
+                bpy.ops.object.bake('INVOKE_DEFAULT')
+        elif event.type == 'ESC':
+            bpy.app.handlers.object_bake_complete.remove(self.bake_complete)
+            bpy.app.handlers.object_bake_cancel.remove(self.bake_cancel)
+            bpy.app.handlers.object_bake_pre.remove(self.bake_pre)
+            context.window_manager.event_timer_remove(self._timer)
+            return {'CANCELLED'}
+        return {'RUNNING_MODAL'}
     
 class BakeAnimationPanel(bpy.types.Panel):
     bl_space_type = 'NODE_EDITOR'
@@ -66,12 +133,18 @@ class BakeAnimationPanel(bpy.types.Panel):
         
         row = col.row()
         row.label(text="image:")
-        row.prop(context.scene.anim_bake_settings, "texture_node", text="")
+        row.label(text=active_node.image.name)
+        #row.prop(context.scene.anim_bake_settings, "texture_node", text="")
         
         
         col2 = layout.column()
-        col2.operator(BakeAnimationOperator.bl_idname, icon="RENDER_ANIMATION", text="render")
+        render = col2.operator(BakeAnimationOperator.bl_idname, icon="RENDER_ANIMATION", text="render full")
+        render.img = active_node.image.name
+        render.render_frame = False
         
+        render_current = col2.operator(BakeAnimationOperator.bl_idname, icon="RENDER_ANIMATION", text="render current")
+        render_current.render_frame = True
+        render_current.img = active_node.image.name
         
     
 
@@ -90,6 +163,8 @@ def register():
 def unregister():
     for my_class in classes:
         bpy.utils.unregister_class(my_class)
+    #properties
+    del bpy.types.Scene.anim_bake_settings
             
 if __name__ == '__main__':
     register()
