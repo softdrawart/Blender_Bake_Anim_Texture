@@ -78,7 +78,7 @@ class BakeAnimationOperator(bpy.types.Operator):
         #check if image is unpacked
         if bpy.data.images[self.img].packed_file:
             bpy.ops.image.unpack(id=self.img)
-            print(f"unpacking image {self.img} to {bpy.data.images[self.img].path}")
+            print(f"unpacking image {self.img} to {bpy.data.images[self.img].filepath}")
         
         self.baking = False
         self._cancel = False
