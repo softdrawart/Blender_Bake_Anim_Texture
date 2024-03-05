@@ -139,7 +139,7 @@ class BakeAnimationPanel(bpy.types.Panel):
         space = context.space_data
         node = context.active_node
         image = getattr(node, 'image', None)
-        return image and space.type == 'NODE_EDITOR'
+        return image and space.type == 'NODE_EDITOR' and space.tree_type == 'ShaderNodeTree'
 
     def draw(self, context):
         data = bpy.data.materials[context.space_data.id.name].node_tree
