@@ -8,7 +8,7 @@ bl_info = {
     "category": "Animation",
 }
 
-import bpy, shutil
+import bpy, shutil, os
 
 def texture_node(self, context):
     # Get the active node's image name
@@ -35,17 +35,31 @@ class BakeAnimationOperator(bpy.types.Operator):
     render_frame: bpy.props.BoolProperty(default=False)  # frame rendering
     img: bpy.props.StringProperty(default='') # image rendered
     
+    def filepath(self, img_name, location, frame):
+        #set location to location set by user and a file name "filename####.png"
+        #if no location set, set basename location to the bake image locaiton
+        if not location:
+            location = os.path.dirname(bpy.data.images['testBack'].filepath) #set base location of the image
+        else:
+            abs_path = bpy.path.abspath(location)
+            file_name = os.path.basename(abs_path)#get new file name set by user
+            if file_name:
+                img_name = file_name
+        path = bpy.path.abspath(f"{location}{img_name}{frame:04d}.png")
+        return path
+        
     def bake_complete(self, scene, context=None):
         print("Bake complete")
         
         #save image
-        img = bpy.data.images[self.img]
-        filename = bpy.path.abspath(f"//render_{bpy.context.scene.frame_current:04d}.png")
-        img_filepath_abs = bpy.path.abspath(img.filepath, library=img.library)
-        print(f"Saving file {filename}")
-        
+        img = bpy.data.images[self.img] #get image data block
+        print(f"Saving base image {img.filepath}")
         img.save()
-        shutil.copyfile(img_filepath_abs, filename)
+        img_filepath_abs = bpy.path.abspath(img.filepath) #convert relative path of the original image to absolute
+        
+        filename = self.filepath(self.img, bpy.context.scene.anim_bake_settings.filepath, bpy.context.scene.frame_current) #form a new file name location
+        print(f"Saving file {filename}")
+        shutil.copyfile(img_filepath_abs, filename)#copy base image to new file location
         
         self.baking = False
         if not self.render_frame:
@@ -61,6 +75,11 @@ class BakeAnimationOperator(bpy.types.Operator):
     def poll(cls, context):
         return bpy.context.mode == 'OBJECT'
     def execute(self, context):
+        #check if image is unpacked
+        if bpy.data.images[self.img].packed_file:
+            bpy.ops.image.unpack(id=self.img)
+            print(f"unpacking image {self.img} to {bpy.data.images[self.img].path}")
+        
         self.baking = False
         self._cancel = False
         #set frame start as our current frame
