@@ -35,6 +35,34 @@ class BakeAnimationOperator(bpy.types.Operator):
     render_frame: bpy.props.BoolProperty(default=False)  # frame rendering
     img: bpy.props.StringProperty(default='') # image rendered
     
+    def get_or_create_and_activate_image_node(self, material_name, image_name):
+        # Find the material
+        material = bpy.data.materials.get(material_name)
+        if material is None:
+            return None  # Material not found
+
+        # Check if the material has a node tree
+        if not material.use_nodes:
+            material.use_nodes = True
+
+        # Iterate through the nodes in the material's node tree
+        for node in material.node_tree.nodes:
+            if node.type == 'TEX_IMAGE' and node.image and node.image.name == image_name:
+                material.node_tree.nodes.active = node  # Make the node active
+                return node
+
+        # If the image node doesn't exist, create a new one
+        image_node = material.node_tree.nodes.new(type='ShaderNodeTexImage')
+        image = bpy.data.images.get(image_name)
+        if not image:
+            return None  # Image not found
+        image_node.image = image
+
+        # Make the new image node active
+        material.node_tree.nodes.active = image_node
+
+        return image_node
+    
     def filepath(self, img_name, location, frame):
         #set location to location set by user and a file name "filename####.png"
         #if no location set, set basename location to the bake image locaiton
@@ -79,7 +107,10 @@ class BakeAnimationOperator(bpy.types.Operator):
         if bpy.data.images[self.img].packed_file:
             bpy.ops.image.unpack(id=self.img)
             print(f"unpacking image {self.img} to {bpy.data.images[self.img].filepath}")
-        
+        #set active image node for all materials, add node if it does not exist
+        for mat in context.active_object.material_slots:
+            self.get_or_create_and_activate_image_node(mat.name, self.img)
+        #set local variable
         self.baking = False
         self._cancel = False
         #set frame start as our current frame
