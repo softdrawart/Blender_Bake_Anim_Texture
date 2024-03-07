@@ -1,5 +1,5 @@
 bl_info = {
-    "name": "Bake Render Textures",
+    "name": "Bake Bake Textures",
     "author": "Mikhail Lebedev",
     "version": (1, 0, 0),
     "blender": (3, 6, 5),
@@ -17,7 +17,8 @@ def texture_node(self, context):
     return active_node.image.name if active_node else ""
 
 class BakeSettings(bpy.types.PropertyGroup):
-    filepath: bpy.props.StringProperty(subtype="FILE_PATH", description="render folder path")
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH", description="bake folder path")
+    hide_hair: bpy.props.BoolProperty(name="hide hair", description="hide hair before baking", default=True)
     #texture_node: bpy.props.StringProperty(name = "Image Texture Node", description = "Select any Texture Node")
 
 class BakeAnimationOperator(bpy.types.Operator):
@@ -32,9 +33,38 @@ class BakeAnimationOperator(bpy.types.Operator):
     baking = False
     _cancel = False
     _timer = None
-    render_frame: bpy.props.BoolProperty(default=False)  # frame rendering
-    img: bpy.props.StringProperty(default='') # image rendered
-    
+    bake_frame: bpy.props.BoolProperty(default=False)  # frame bakeing
+    img: bpy.props.StringProperty(default='') # image bakeed
+    hair_modfier_list = [] #disabled hair modifier list
+    def hide_hair_list(self, object_name):
+        hair_modifiers = []
+        
+        # Get the object by name
+        obj = bpy.data.objects.get(object_name)
+        if obj is None:
+            return hair_modifiers  # Return an empty list if the object is not found
+        
+        # Loop through all modifiers of the object
+        for modifier in obj.modifiers:
+            if modifier.type == 'PARTICLE_SYSTEM':
+                particle_system = modifier.particle_system
+                if particle_system.settings.type == 'HAIR' and modifier.show_render:
+                    # Append the hair type modifier to the list
+                    hair_modifiers.append(modifier.name)
+                    # Turn off render visibility mode
+                    modifier.show_render = False
+        
+        return hair_modifiers
+        
+    def enable_hair(self):
+        obj = bpy.context.active_object
+        # Loop through all modifiers of the object
+        if obj:
+            for modifier_name in self.hair_modfier_list:
+                if modifier_name in obj.modifiers:
+                    # Turn on render visibility mode
+                    obj.modifiers[modifier_name].show_render = True
+        return obj
     def get_or_create_and_activate_image_node(self, material_name, image_name):
         # Find the material
         material = bpy.data.materials.get(material_name)
@@ -62,10 +92,9 @@ class BakeAnimationOperator(bpy.types.Operator):
         material.node_tree.nodes.active = image_node
 
         return image_node
-    
     def filepath(self, img_name, location, frame):
         #set location to location set by user and a file name "filename####.png"
-        #if no location set, set basename location to the bake image locaiton
+        #if no location set, set basename location to the bake image location
         if not location:
             location = os.path.dirname(bpy.data.images['testBack'].filepath) #set base location of the image
         else:
@@ -73,6 +102,8 @@ class BakeAnimationOperator(bpy.types.Operator):
             file_name = os.path.basename(abs_path)#get new file name set by user
             if file_name:
                 img_name = file_name
+                location = os.path.dirname(abs_path) + '\\' #get new dir path set by user
+                print(f"location is {location}")
         path = bpy.path.abspath(f"{location}{img_name}{frame:04d}.png")
         return path
         
@@ -90,7 +121,7 @@ class BakeAnimationOperator(bpy.types.Operator):
         shutil.copyfile(img_filepath_abs, filename)#copy base image to new file location
         
         self.baking = False
-        if not self.render_frame:
+        if not self.bake_frame:
             bpy.context.scene.frame_current += 1
     def bake_pre(self, scene, context=None):
         print("Bake started")
@@ -103,6 +134,9 @@ class BakeAnimationOperator(bpy.types.Operator):
     def poll(cls, context):
         return bpy.context.mode == 'OBJECT'
     def execute(self, context):
+        #form hair modifier list
+        if context.scene.anim_bake_settings.hide_hair:
+            self.hair_modfier_list = self.hide_hair_list(context.active_object.name)
         #check if image is unpacked
         if bpy.data.images[self.img].packed_file:
             bpy.ops.image.unpack(id=self.img)
@@ -114,7 +148,7 @@ class BakeAnimationOperator(bpy.types.Operator):
         self.baking = False
         self._cancel = False
         #set frame start as our current frame
-        if not self.render_frame:
+        if not self.bake_frame:
             context.scene.frame_current = context.scene.frame_start
         wm = bpy.context.window_manager
         #add bake handlers
@@ -129,12 +163,15 @@ class BakeAnimationOperator(bpy.types.Operator):
         return {'RUNNING_MODAL'}
     def modal(self, context, event):
         if event.type == 'TIMER':
-            #if its not the end of the frame range and not single frame render and the baking is finished then call another bake
-            if context.scene.frame_current > context.scene.frame_end or self._cancel or (self.render_frame and not self.baking):
+            #if its not the end of the frame range and not single frame bake and the baking is finished then call another bake
+            if context.scene.frame_current > context.scene.frame_end or self._cancel or (self.bake_frame and not self.baking):
                 bpy.app.handlers.object_bake_complete.remove(self.bake_complete)
                 bpy.app.handlers.object_bake_cancel.remove(self.bake_cancel)
                 bpy.app.handlers.object_bake_pre.remove(self.bake_pre)
-                
+                #turn on previously turned off hair
+                if context.scene.anim_bake_settings.hide_hair:
+                    self.enable_hair()
+                #remove timer
                 context.window_manager.event_timer_remove(self._timer)
                 if self._cancel:
                     return {'CANCELLED'}
@@ -146,6 +183,9 @@ class BakeAnimationOperator(bpy.types.Operator):
             bpy.app.handlers.object_bake_cancel.remove(self.bake_cancel)
             bpy.app.handlers.object_bake_pre.remove(self.bake_pre)
             context.window_manager.event_timer_remove(self._timer)
+            #turn on previously turned off hair
+            if context.scene.anim_bake_settings.hide_hair:
+                self.enable_hair()
             return {'CANCELLED'}
         return {'RUNNING_MODAL'}
     
@@ -188,13 +228,15 @@ class BakeAnimationPanel(bpy.types.Panel):
         
         
         col2 = layout.column()
-        render = col2.operator(BakeAnimationOperator.bl_idname, icon="RENDER_ANIMATION", text="render full")
-        render.img = active_node.image.name
-        render.render_frame = False
+        bake = col2.operator(BakeAnimationOperator.bl_idname, icon="RENDER_ANIMATION", text="bake full")
+        bake.img = active_node.image.name
+        bake.bake_frame = False
         
-        render_current = col2.operator(BakeAnimationOperator.bl_idname, icon="RENDER_ANIMATION", text="render current")
-        render_current.render_frame = True
-        render_current.img = active_node.image.name
+        bake_current = col2.operator(BakeAnimationOperator.bl_idname, icon="RENDER_STILL", text="bake current")
+        bake_current.bake_frame = True
+        bake_current.img = active_node.image.name
+        
+        hide_hair = col2.prop(context.scene.anim_bake_settings, "hide_hair", text="hide hair")
         
     
 
