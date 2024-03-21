@@ -95,25 +95,33 @@ class BakeAnimationOperator(bpy.types.Operator):
     def filepath(self, img_name, location, frame):
         #set location to location set by user and a file name "filename####.png"
         #if no location set, set basename location to the bake image location
-        if not location:
-            location = os.path.dirname(bpy.data.images['testBack'].filepath) #set base location of the image
+        if not location or not os.path.exists(os.path.dirname(bpy.path.abspath(location))):
+            old_location = location
+            location = os.path.dirname(bpy.data.images[self.img].filepath) #set base location of the image
+            print(f"The path '{old_location}' does not exist. Saving to {location}")
         else:
             abs_path = bpy.path.abspath(location)
             file_name = os.path.basename(abs_path)#get new file name set by user
             if file_name:
-                img_name = file_name
-                location = os.path.dirname(abs_path) + '\\' #get new dir path set by user
+                # Remove the extension if it exists
+                img_name, extension = os.path.splitext(file_name)
+                location = os.path.dirname(abs_path) #get new dir path set by user
                 print(f"location is {location}")
-        path = bpy.path.abspath(f"{location}{img_name}{frame:04d}.png")
+        path = bpy.path.abspath(f"{location}\\{img_name}{frame:04d}.png")
         return path
         
     def bake_complete(self, scene, context=None):
         print("Bake complete")
-        
         #save image
         img = bpy.data.images[self.img] #get image data block
-        print(f"Saving base image {img.filepath}")
-        img.save()
+        
+        try:
+            img.save()
+            print(f"Saving {self.img} image to {img.filepath}")
+        except Exception as e:
+            print(f"An error occurred while saving image '{self.img}': {e}")
+            self._cancel = True
+        
         img_filepath_abs = bpy.path.abspath(img.filepath) #convert relative path of the original image to absolute
         
         filename = self.filepath(self.img, bpy.context.scene.anim_bake_settings.filepath, bpy.context.scene.frame_current) #form a new file name location
@@ -134,13 +142,19 @@ class BakeAnimationOperator(bpy.types.Operator):
     def poll(cls, context):
         return bpy.context.mode == 'OBJECT'
     def execute(self, context):
+        if not bpy.data.filepath:
+            print("Please save file first")
+            return {'CANCELLED'}
+        
+        #check if image does not have filepath (for saving method)
+        if bpy.data.images[self.img].filepath == '':
+            bpy.ops.image.unpack(id=self.img)
+            if bpy.data.images[self.img].filepath == '':
+                bpy.data.images[self.img].filepath = os.path.dirname(bpy.data.filepath) + "\\" + self.img + ".png"
+            print(f"setting image {self.img} path to {bpy.data.images[self.img].filepath}")
         #form hair modifier list
         if context.scene.anim_bake_settings.hide_hair:
             self.hair_modfier_list = self.hide_hair_list(context.active_object.name)
-        #check if image is unpacked
-        if bpy.data.images[self.img].packed_file:
-            bpy.ops.image.unpack(id=self.img)
-            print(f"unpacking image {self.img} to {bpy.data.images[self.img].filepath}")
         #set active image node for all materials, add node if it does not exist
         for mat in context.active_object.material_slots:
             self.get_or_create_and_activate_image_node(mat.name, self.img)
